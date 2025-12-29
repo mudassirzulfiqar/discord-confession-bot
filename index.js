@@ -120,6 +120,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       serverId: selectedServer.id,
       channelId: channel.id,
       confessionId: crypto.randomUUID(),
+      userHash: hashedUserId,
       message: pending.message
     });
 
@@ -199,6 +200,7 @@ client.on("messageCreate", async (message) => {
       serverId: server.id,
       channelId: channel.id,
       confessionId: crypto.randomUUID(),
+      userHash: hashedUserId,
       message: confessionText
     });
 

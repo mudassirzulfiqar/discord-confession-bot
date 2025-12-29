@@ -49,7 +49,8 @@ export async function saveConfession({
   serverId,
   channelId,
   confessionId,
-  message
+  message,
+  userHash
 }) {
   const now = new Date().toISOString();
 
@@ -64,6 +65,7 @@ export async function saveConfession({
         channelId,
         confessionId,
         message,
+        userHash, // ✅ ADD THIS
         status: "ACTIVE",
         createdAt: now
       }
