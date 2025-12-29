@@ -2,8 +2,9 @@ import {
   Client,
   GatewayIntentBits,
   Partials,
+  EmbedBuilder,
   PermissionsBitField,
-  EmbedBuilder
+  Events
 } from "discord.js";
 import crypto from "crypto";
 import { config } from "./config.js";
@@ -33,48 +34,52 @@ const client = new Client({
   partials: [Partials.Channel]
 });
 
-client.once("ready", () => {
+client.once(Events.ClientReady, () => {
   console.log(`✅ Bot logged in as ${client.user.tag}`);
 });
 
-client.on("messageCreate", async (message) => {
-  if (message.author.bot) return;
+/**
+ * ================================
+ * SLASH COMMAND HANDLER
+ * ================================
+ */
+client.on(Events.InteractionCreate, async (interaction) => {
+  if (!interaction.isChatInputCommand()) return;
 
-  /**
-   * ================================
-   * ADMIN COMMAND (SERVER)
-   * ================================
-   */
-  if (message.guild && message.content === "!setconfession") {
+  if (interaction.commandName === "setconfession") {
     if (
-      !message.member.permissions.has(
+      !interaction.memberPermissions.has(
         PermissionsBitField.Flags.Administrator
       )
     ) {
-      await message.reply("❌ Admin permission required.");
+      await interaction.reply({
+        content: "❌ Admin permission required.",
+        ephemeral: true
+      });
       return;
     }
 
-    await saveServerConfig(message.guild.id, message.channel.id);
+    await saveServerConfig(interaction.guildId, interaction.channelId);
 
-    await message.reply(
-      `✅ Confession channel set to <#${message.channel.id}>`
-    );
-    return;
+    await interaction.reply({
+      content: `✅ Confession channel set to <#${interaction.channelId}>`,
+      ephemeral: true
+    });
   }
+});
 
-  /**
-   * ================================
-   * DM FLOW
-   * ================================
-   */
+/**
+ * ================================
+ * DM CONFESSION FLOW (UNCHANGED)
+ * ================================
+ */
+client.on("messageCreate", async (message) => {
+  if (message.author.bot) return;
   if (message.guild) return;
 
   const hashedUserId = hashUserId(message.author.id);
 
-  /**
-   * STEP 2 — User replies with a number
-   */
+  // STEP 2 — User selects server
   const pending = await getPendingConfession(hashedUserId);
   if (pending) {
     const choice = parseInt(message.content, 10);
@@ -85,7 +90,6 @@ client.on("messageCreate", async (message) => {
 
     const selectedServer = pending.servers[choice - 1];
     const serverConfig = await getServerConfig(selectedServer.id);
-
     const channel = await client.channels.fetch(
       serverConfig.confessionChannelId
     );
@@ -112,9 +116,7 @@ client.on("messageCreate", async (message) => {
     return;
   }
 
-  /**
-   * STEP 1 — User sends confession
-   */
+  // STEP 1 — New confession
   if (!message.content.toLowerCase().startsWith("confess:")) {
     await message.reply("Use format:\n`confess: your message here`");
     return;
@@ -126,7 +128,6 @@ client.on("messageCreate", async (message) => {
     return;
   }
 
-  // Find eligible servers
   const eligibleServers = [];
 
   for (const guild of client.guilds.cache.values()) {
@@ -150,11 +151,9 @@ client.on("messageCreate", async (message) => {
     return;
   }
 
-  // Only one server → auto post
   if (eligibleServers.length === 1) {
     const server = eligibleServers[0];
     const serverConfig = await getServerConfig(server.id);
-
     const channel = await client.channels.fetch(
       serverConfig.confessionChannelId
     );
@@ -180,7 +179,6 @@ client.on("messageCreate", async (message) => {
     return;
   }
 
-  // Multiple servers → ask user
   await savePendingConfession({
     hashedUserId,
     message: confessionText,

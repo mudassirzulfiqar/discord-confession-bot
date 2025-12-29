@@ -1,11 +1,11 @@
 {
   "name": "discord-confession-bot",
   "version": "1.0.0",
-  "description": "Anonymous multi-server Discord confession bot",
   "type": "module",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "register": "node register-commands.js"
   },
   "dependencies": {
     "discord.js": "^14.15.3",
