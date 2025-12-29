@@ -1,0 +1,15 @@
+{
+  "name": "discord-confession-bot",
+  "version": "1.0.0",
+  "description": "Anonymous multi-server Discord confession bot",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.15.3",
+    "@aws-sdk/client-dynamodb": "^3.540.0",
+    "@aws-sdk/lib-dynamodb": "^3.540.0"
+  }
+}
