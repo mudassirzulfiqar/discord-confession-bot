@@ -6,12 +6,22 @@ import {
   EmbedBuilder
 } from "discord.js";
 import crypto from "crypto";
+import { config } from "./config.js";
 import {
   saveServerConfig,
   getServerConfig,
-  saveConfession
+  saveConfession,
+  savePendingConfession,
+  getPendingConfession,
+  deletePendingConfession
 } from "./dynamo.js";
-import { config } from "./config.js";
+
+/**
+ * Hash user ID (privacy-safe)
+ */
+function hashUserId(userId) {
+  return crypto.createHash("sha256").update(userId).digest("hex");
+}
 
 const client = new Client({
   intents: [
@@ -31,7 +41,9 @@ client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
 
   /**
-   * ADMIN COMMAND (run inside server)
+   * ================================
+   * ADMIN COMMAND (SERVER)
+   * ================================
    */
   if (message.guild && message.content === "!setconfession") {
     if (
@@ -44,6 +56,7 @@ client.on("messageCreate", async (message) => {
     }
 
     await saveServerConfig(message.guild.id, message.channel.id);
+
     await message.reply(
       `✅ Confession channel set to <#${message.channel.id}>`
     );
@@ -51,14 +64,59 @@ client.on("messageCreate", async (message) => {
   }
 
   /**
-   * CONFESSION FLOW (DM only)
+   * ================================
+   * DM FLOW
+   * ================================
    */
   if (message.guild) return;
 
-  if (!message.content.toLowerCase().startsWith("confess:")) {
-    await message.reply(
-      "Use format:\n`confess: your message here`"
+  const hashedUserId = hashUserId(message.author.id);
+
+  /**
+   * STEP 2 — User replies with a number
+   */
+  const pending = await getPendingConfession(hashedUserId);
+  if (pending) {
+    const choice = parseInt(message.content, 10);
+    if (isNaN(choice) || choice < 1 || choice > pending.servers.length) {
+      await message.reply("❌ Invalid selection.");
+      return;
+    }
+
+    const selectedServer = pending.servers[choice - 1];
+    const serverConfig = await getServerConfig(selectedServer.id);
+
+    const channel = await client.channels.fetch(
+      serverConfig.confessionChannelId
     );
+
+    await channel.send({
+      embeds: [
+        new EmbedBuilder()
+          .setTitle("💬 Anonymous Confession")
+          .setDescription(pending.message)
+          .setColor(0xff66cc)
+          .setTimestamp()
+      ]
+    });
+
+    await saveConfession({
+      serverId: selectedServer.id,
+      channelId: channel.id,
+      confessionId: crypto.randomUUID(),
+      message: pending.message
+    });
+
+    await deletePendingConfession(hashedUserId);
+    await message.reply("✅ Your confession was posted anonymously.");
+    return;
+  }
+
+  /**
+   * STEP 1 — User sends confession
+   */
+  if (!message.content.toLowerCase().startsWith("confess:")) {
+    await message.reply("Use format:\n`confess: your message here`");
     return;
   }
 
@@ -68,51 +126,74 @@ client.on("messageCreate", async (message) => {
     return;
   }
 
-  try {
-    const confessionId = crypto.randomUUID();
+  // Find eligible servers
+  const eligibleServers = [];
 
-    // Find mutual server
-    const guild = client.guilds.cache.find(g =>
-      g.members.cache.has(message.author.id)
-    );
+  for (const guild of client.guilds.cache.values()) {
+    const member = await guild.members
+      .fetch(message.author.id)
+      .catch(() => null);
 
-    if (!guild) {
-      await message.reply("❌ No mutual server found.");
-      return;
-    }
+    if (!member) continue;
 
-    const serverConfig = await getServerConfig(guild.id);
-    if (!serverConfig) {
-      await message.reply(
-        "❌ Confession channel not set in this server."
-      );
-      return;
-    }
+    const cfg = await getServerConfig(guild.id);
+    if (!cfg) continue;
+
+    eligibleServers.push({
+      id: guild.id,
+      name: guild.name
+    });
+  }
+
+  if (eligibleServers.length === 0) {
+    await message.reply("❌ No server has confessions enabled.");
+    return;
+  }
+
+  // Only one server → auto post
+  if (eligibleServers.length === 1) {
+    const server = eligibleServers[0];
+    const serverConfig = await getServerConfig(server.id);
 
     const channel = await client.channels.fetch(
       serverConfig.confessionChannelId
     );
 
-    const embed = new EmbedBuilder()
-      .setTitle("💬 Anonymous Confession")
-      .setDescription(confessionText)
-      .setColor(0xff66cc)
-      .setTimestamp();
-
-    await channel.send({ embeds: [embed] });
+    await channel.send({
+      embeds: [
+        new EmbedBuilder()
+          .setTitle("💬 Anonymous Confession")
+          .setDescription(confessionText)
+          .setColor(0xff66cc)
+          .setTimestamp()
+      ]
+    });
 
     await saveConfession({
-      serverId: guild.id,
+      serverId: server.id,
       channelId: channel.id,
-      confessionId,
+      confessionId: crypto.randomUUID(),
       message: confessionText
     });
 
     await message.reply("✅ Your confession was posted anonymously.");
-  } catch (err) {
-    console.error(err);
-    await message.reply("❌ Something went wrong.");
+    return;
   }
+
+  // Multiple servers → ask user
+  await savePendingConfession({
+    hashedUserId,
+    message: confessionText,
+    servers: eligibleServers
+  });
+
+  const serverList = eligibleServers
+    .map((s, i) => `${i + 1}️⃣ ${s.name}`)
+    .join("\n");
+
+  await message.reply(
+    `Which server is this confession for?\n\n${serverList}\n\nReply with the number (expires in 5 minutes).`
+  );
 });
 
 client.login(config.discordToken);
