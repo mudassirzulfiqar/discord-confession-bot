@@ -4,7 +4,10 @@ import {
   Partials,
   EmbedBuilder,
   PermissionsBitField,
-  Events
+  Events,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle
 } from "discord.js";
 import crypto from "crypto";
 import { config } from "./config.js";
@@ -40,55 +43,64 @@ client.once(Events.ClientReady, () => {
 
 /**
  * ================================
- * SLASH COMMAND HANDLER
+ * SLASH COMMAND
  * ================================
  */
 client.on(Events.InteractionCreate, async (interaction) => {
-  if (!interaction.isChatInputCommand()) return;
+  if (interaction.isChatInputCommand()) {
+    if (interaction.commandName === "setconfession") {
+      if (
+        !interaction.memberPermissions.has(
+          PermissionsBitField.Flags.Administrator
+        )
+      ) {
+        await interaction.reply({
+          content: "❌ Admin permission required.",
+          ephemeral: true
+        });
+        return;
+      }
 
-  if (interaction.commandName === "setconfession") {
-    if (
-      !interaction.memberPermissions.has(
-        PermissionsBitField.Flags.Administrator
-      )
-    ) {
+      await saveServerConfig(interaction.guildId, interaction.channelId);
+
       await interaction.reply({
-        content: "❌ Admin permission required.",
+        content: `✅ Confession channel set to <#${interaction.channelId}>`,
+        ephemeral: true
+      });
+    }
+    return;
+  }
+
+  /**
+   * ================================
+   * BUTTON HANDLER
+   * ================================
+   */
+  if (interaction.isButton()) {
+    const hashedUserId = hashUserId(interaction.user.id);
+    const pending = await getPendingConfession(hashedUserId);
+
+    if (!pending) {
+      await interaction.reply({
+        content: "❌ This confession request has expired.",
         ephemeral: true
       });
       return;
     }
 
-    await saveServerConfig(interaction.guildId, interaction.channelId);
+    const serverId = interaction.customId.replace("CONFESS_SERVER_", "");
+    const selectedServer = pending.servers.find(
+      (s) => s.id === serverId
+    );
 
-    await interaction.reply({
-      content: `✅ Confession channel set to <#${interaction.channelId}>`,
-      ephemeral: true
-    });
-  }
-});
-
-/**
- * ================================
- * DM CONFESSION FLOW (UNCHANGED)
- * ================================
- */
-client.on("messageCreate", async (message) => {
-  if (message.author.bot) return;
-  if (message.guild) return;
-
-  const hashedUserId = hashUserId(message.author.id);
-
-  // STEP 2 — User selects server
-  const pending = await getPendingConfession(hashedUserId);
-  if (pending) {
-    const choice = parseInt(message.content, 10);
-    if (isNaN(choice) || choice < 1 || choice > pending.servers.length) {
-      await message.reply("❌ Invalid selection.");
+    if (!selectedServer) {
+      await interaction.reply({
+        content: "❌ Invalid server selection.",
+        ephemeral: true
+      });
       return;
     }
 
-    const selectedServer = pending.servers[choice - 1];
     const serverConfig = await getServerConfig(selectedServer.id);
     const channel = await client.channels.fetch(
       serverConfig.confessionChannelId
@@ -112,11 +124,25 @@ client.on("messageCreate", async (message) => {
     });
 
     await deletePendingConfession(hashedUserId);
-    await message.reply("✅ Your confession was posted anonymously.");
-    return;
-  }
 
-  // STEP 1 — New confession
+    await interaction.reply({
+      content: "✅ Your confession was posted anonymously.",
+      ephemeral: true
+    });
+  }
+});
+
+/**
+ * ================================
+ * DM CONFESSION FLOW
+ * ================================
+ */
+client.on("messageCreate", async (message) => {
+  if (message.author.bot) return;
+  if (message.guild) return;
+
+  const hashedUserId = hashUserId(message.author.id);
+
   if (!message.content.toLowerCase().startsWith("confess:")) {
     await message.reply("Use format:\n`confess: your message here`");
     return;
@@ -151,6 +177,7 @@ client.on("messageCreate", async (message) => {
     return;
   }
 
+  // Single server → auto post
   if (eligibleServers.length === 1) {
     const server = eligibleServers[0];
     const serverConfig = await getServerConfig(server.id);
@@ -179,19 +206,33 @@ client.on("messageCreate", async (message) => {
     return;
   }
 
+  // Multiple servers → buttons
   await savePendingConfession({
     hashedUserId,
     message: confessionText,
     servers: eligibleServers
   });
 
-  const serverList = eligibleServers
-    .map((s, i) => `${i + 1}️⃣ ${s.name}`)
-    .join("\n");
-
-  await message.reply(
-    `Which server is this confession for?\n\n${serverList}\n\nReply with the number (expires in 5 minutes).`
+  const buttons = eligibleServers.map((s) =>
+    new ButtonBuilder()
+      .setCustomId(`CONFESS_SERVER_${s.id}`)
+      .setLabel(s.name)
+      .setStyle(ButtonStyle.Primary)
   );
+
+  const rows = [];
+  for (let i = 0; i < buttons.length; i += 5) {
+    rows.push(
+      new ActionRowBuilder().addComponents(
+        buttons.slice(i, i + 5)
+      )
+    );
+  }
+
+  await message.reply({
+    content: "Which server is this confession for?",
+    components: rows
+  });
 });
 
 client.login(config.discordToken);
