@@ -21,10 +21,18 @@ import {
 } from "./dynamo.js";
 
 /**
- * Hash user ID (privacy-safe)
+ * Helpers
  */
 function hashUserId(userId) {
   return crypto.createHash("sha256").update(userId).digest("hex");
+}
+
+function shortConfessionId(uuid) {
+  return `C-${uuid.split("-")[0].toUpperCase()}`;
+}
+
+function anonId(userHash) {
+  return `A-${userHash.slice(0, 6).toUpperCase()}`;
 }
 
 const client = new Client({
@@ -72,7 +80,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     return;
   }
 
-  // Button click (server selection)
+  // Button selection
   if (interaction.isButton()) {
     const hashedUserId = hashUserId(interaction.user.id);
     const pending = await getPendingConfession(hashedUserId);
@@ -90,29 +98,25 @@ client.on(Events.InteractionCreate, async (interaction) => {
       (s) => s.id === serverId
     );
 
-    if (!selectedServer) {
-      await interaction.reply({
-        content: "❌ Invalid server selection.",
-        ephemeral: true
-      });
-      return;
-    }
-
     const serverConfig = await getServerConfig(selectedServer.id);
     const channel = await client.channels.fetch(
       serverConfig.confessionChannelId
     );
 
-    // ================================
-    // BUILD EMBED WITH IMAGE (if any)
-    // ================================
+    const confessionUuid = crypto.randomUUID();
+    const confessionShort = shortConfessionId(confessionUuid);
+    const anon = anonId(hashedUserId);
+
     const embed = new EmbedBuilder()
       .setTitle("💬 Anonymous Confession")
       .setDescription(pending.message)
       .setColor(0xff66cc)
-      .setTimestamp();
+      .setTimestamp()
+      .setFooter({
+        text: `Confession ID: ${confessionShort} | Anon ID: ${anon}`
+      });
 
-    if (pending.media && pending.media.length > 0) {
+    if (pending.media?.length > 0) {
       embed.setImage(pending.media[0].url);
     }
 
@@ -121,7 +125,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
     await saveConfession({
       serverId: selectedServer.id,
       channelId: channel.id,
-      confessionId: crypto.randomUUID(),
+      confessionUuid,
+      confessionShortId: confessionShort,
       message: pending.message,
       userHash: hashedUserId
     });
@@ -137,7 +142,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
 /**
  * ================================
- * DM CONFESSION FLOW (WITH MEDIA)
+ * DM CONFESSION FLOW
  * ================================
  */
 client.on("messageCreate", async (message) => {
@@ -157,17 +162,11 @@ client.on("messageCreate", async (message) => {
     return;
   }
 
-  // ================================
-  // EXTRACT IMAGE / GIF ATTACHMENTS
-  // ================================
+  // Extract image / GIF
   const media = [];
-
   for (const attachment of message.attachments.values()) {
     if (attachment.contentType?.startsWith("image/")) {
-      media.push({
-        url: attachment.url,
-        type: attachment.contentType
-      });
+      media.push({ url: attachment.url });
     }
   }
 
@@ -189,14 +188,6 @@ client.on("messageCreate", async (message) => {
     });
   }
 
-  if (eligibleServers.length === 0) {
-    await message.reply("❌ No server has confessions enabled.");
-    return;
-  }
-
-  // ================================
-  // SINGLE SERVER → POST DIRECTLY
-  // ================================
   if (eligibleServers.length === 1) {
     const server = eligibleServers[0];
     const serverConfig = await getServerConfig(server.id);
@@ -204,11 +195,18 @@ client.on("messageCreate", async (message) => {
       serverConfig.confessionChannelId
     );
 
+    const confessionUuid = crypto.randomUUID();
+    const confessionShort = shortConfessionId(confessionUuid);
+    const anon = anonId(hashedUserId);
+
     const embed = new EmbedBuilder()
       .setTitle("💬 Anonymous Confession")
       .setDescription(confessionText)
       .setColor(0xff66cc)
-      .setTimestamp();
+      .setTimestamp()
+      .setFooter({
+        text: `Confession ID: ${confessionShort} | Anon ID: ${anon}`
+      });
 
     if (media.length > 0) {
       embed.setImage(media[0].url);
@@ -219,7 +217,8 @@ client.on("messageCreate", async (message) => {
     await saveConfession({
       serverId: server.id,
       channelId: channel.id,
-      confessionId: crypto.randomUUID(),
+      confessionUuid,
+      confessionShortId: confessionShort,
       message: confessionText,
       userHash: hashedUserId
     });
@@ -228,9 +227,6 @@ client.on("messageCreate", async (message) => {
     return;
   }
 
-  // ================================
-  // MULTI SERVER → STORE PENDING
-  // ================================
   await savePendingConfession({
     hashedUserId,
     message: confessionText,
@@ -247,11 +243,7 @@ client.on("messageCreate", async (message) => {
 
   const rows = [];
   for (let i = 0; i < buttons.length; i += 5) {
-    rows.push(
-      new ActionRowBuilder().addComponents(
-        buttons.slice(i, i + 5)
-      )
-    );
+    rows.push(new ActionRowBuilder().addComponents(buttons.slice(i, i + 5)));
   }
 
   await message.reply({

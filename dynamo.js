@@ -43,12 +43,13 @@ export async function getServerConfig(serverId) {
 }
 
 /**
- * Save a confession
+ * Save a confession (WITH IDS)
  */
 export async function saveConfession({
   serverId,
   channelId,
-  confessionId,
+  confessionUuid,
+  confessionShortId,
   message,
   userHash
 }) {
@@ -59,13 +60,14 @@ export async function saveConfession({
       TableName: config.dynamoTableName,
       Item: {
         PK: `SERVER#${serverId}`,
-        SK: `CONFESSION#${now}#${confessionId}`,
+        SK: `CONFESSION#${now}#${confessionUuid}`,
         entityType: "CONFESSION",
         serverId,
         channelId,
-        confessionId,
+        confessionId: confessionUuid,
+        confessionShortId,
         message,
-        userHash, // ✅ ADD THIS
+        userHash,
         status: "ACTIVE",
         createdAt: now
       }
@@ -79,9 +81,10 @@ export async function saveConfession({
 export async function savePendingConfession({
   hashedUserId,
   message,
-  servers
+  servers,
+  media
 }) {
-  const ttl = Math.floor(Date.now() / 1000) + 300; // 5 minutes
+  const ttl = Math.floor(Date.now() / 1000) + 300;
 
   await ddb.send(
     new PutCommand({
@@ -91,6 +94,7 @@ export async function savePendingConfession({
         SK: "PENDING_CONFESSION",
         message,
         servers,
+        media,
         ttl
       }
     })
