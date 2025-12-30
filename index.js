@@ -43,10 +43,11 @@ client.once(Events.ClientReady, () => {
 
 /**
  * ================================
- * SLASH COMMAND
+ * SLASH COMMAND + BUTTON HANDLER
  * ================================
  */
 client.on(Events.InteractionCreate, async (interaction) => {
+  // Slash command
   if (interaction.isChatInputCommand()) {
     if (interaction.commandName === "setconfession") {
       if (
@@ -71,11 +72,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     return;
   }
 
-  /**
-   * ================================
-   * BUTTON HANDLER
-   * ================================
-   */
+  // Button click (server selection)
   if (interaction.isButton()) {
     const hashedUserId = hashUserId(interaction.user.id);
     const pending = await getPendingConfession(hashedUserId);
@@ -106,22 +103,27 @@ client.on(Events.InteractionCreate, async (interaction) => {
       serverConfig.confessionChannelId
     );
 
-    await channel.send({
-      embeds: [
-        new EmbedBuilder()
-          .setTitle("💬 Anonymous Confession")
-          .setDescription(pending.message)
-          .setColor(0xff66cc)
-          .setTimestamp()
-      ]
-    });
+    // ================================
+    // BUILD EMBED WITH IMAGE (if any)
+    // ================================
+    const embed = new EmbedBuilder()
+      .setTitle("💬 Anonymous Confession")
+      .setDescription(pending.message)
+      .setColor(0xff66cc)
+      .setTimestamp();
+
+    if (pending.media && pending.media.length > 0) {
+      embed.setImage(pending.media[0].url);
+    }
+
+    await channel.send({ embeds: [embed] });
 
     await saveConfession({
       serverId: selectedServer.id,
       channelId: channel.id,
       confessionId: crypto.randomUUID(),
-      userHash: hashedUserId,
-      message: pending.message
+      message: pending.message,
+      userHash: hashedUserId
     });
 
     await deletePendingConfession(hashedUserId);
@@ -135,7 +137,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
 /**
  * ================================
- * DM CONFESSION FLOW
+ * DM CONFESSION FLOW (WITH MEDIA)
  * ================================
  */
 client.on("messageCreate", async (message) => {
@@ -153,6 +155,20 @@ client.on("messageCreate", async (message) => {
   if (!confessionText) {
     await message.reply("Confession cannot be empty.");
     return;
+  }
+
+  // ================================
+  // EXTRACT IMAGE / GIF ATTACHMENTS
+  // ================================
+  const media = [];
+
+  for (const attachment of message.attachments.values()) {
+    if (attachment.contentType?.startsWith("image/")) {
+      media.push({
+        url: attachment.url,
+        type: attachment.contentType
+      });
+    }
   }
 
   const eligibleServers = [];
@@ -178,7 +194,9 @@ client.on("messageCreate", async (message) => {
     return;
   }
 
-  // Single server → auto post
+  // ================================
+  // SINGLE SERVER → POST DIRECTLY
+  // ================================
   if (eligibleServers.length === 1) {
     const server = eligibleServers[0];
     const serverConfig = await getServerConfig(server.id);
@@ -186,33 +204,38 @@ client.on("messageCreate", async (message) => {
       serverConfig.confessionChannelId
     );
 
-    await channel.send({
-      embeds: [
-        new EmbedBuilder()
-          .setTitle("💬 Anonymous Confession")
-          .setDescription(confessionText)
-          .setColor(0xff66cc)
-          .setTimestamp()
-      ]
-    });
+    const embed = new EmbedBuilder()
+      .setTitle("💬 Anonymous Confession")
+      .setDescription(confessionText)
+      .setColor(0xff66cc)
+      .setTimestamp();
+
+    if (media.length > 0) {
+      embed.setImage(media[0].url);
+    }
+
+    await channel.send({ embeds: [embed] });
 
     await saveConfession({
       serverId: server.id,
       channelId: channel.id,
       confessionId: crypto.randomUUID(),
-      userHash: hashedUserId,
-      message: confessionText
+      message: confessionText,
+      userHash: hashedUserId
     });
 
     await message.reply("✅ Your confession was posted anonymously.");
     return;
   }
 
-  // Multiple servers → buttons
+  // ================================
+  // MULTI SERVER → STORE PENDING
+  // ================================
   await savePendingConfession({
     hashedUserId,
     message: confessionText,
-    servers: eligibleServers
+    servers: eligibleServers,
+    media
   });
 
   const buttons = eligibleServers.map((s) =>
